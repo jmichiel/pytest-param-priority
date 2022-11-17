@@ -48,23 +48,21 @@ def parameter_priority(priority):
         if not isinstance(marker, FixtureFunctionMarker):
             return func
 
-        scopenum = scopes.index(marker.scope)
-
         real_func = get_real_func(func)
         argname = real_func.__name__
         fspath = local(real_func.__globals__['__file__'])
         cls = get_class_that_defined_method(real_func)
 
-        if scopenum == 0:  # session
+        if marker.scope == 'session':
             key = argname
-        elif scopenum == 1:  # package
+        elif marker.scope == 'package':
             key = (argname, fspath.dirpath())
-        elif scopenum == 2:  # module
+        elif marker.scope == 'module':
             key = (argname, fspath)
-        elif scopenum == 3:  # class
+        elif marker.scope in ('class', 'function'):
             key = (argname, fspath, cls)
 
-        argname_prioinfo[scopenum][key] = priority
+        argname_prioinfo[marker.scope][key] = priority
 
         return func
 
@@ -75,10 +73,11 @@ def parameter_priority(priority):
 # from the test definition with our parameter_priority
 # decorator. From now onwards this is all we need.
 # For each scopenum, save the argnames and its priorities
-argname_prioinfo = {0: {},
-                    1: {},
-                    2: {},
-                    3: {}}
+argname_prioinfo = {'session': {},
+                    'package': {},
+                    'module': {},
+                    'class': {},
+                    'function': {}}
 
 
 # Below this point is the same pytest sorting algorithm but
@@ -91,15 +90,10 @@ scopes = "session package module class function".split()
 scopenum_function = scopes.index("function")
 
 
-def pytest_collection_modifyitems(items):
-    # separate parametrized setups
-    items[:] = reorder_items(items)
 
-
-def get_parametrized_fixture_keys(item, scopenum, priority):
+def get_parametrized_fixture_keys(item, scope, priority):
     """ return list of keys for all parametrized arguments which match
     the specified scope. """
-    assert scopenum < scopenum_function  # function
     try:
         cs = item.callspec
     except AttributeError:
@@ -109,20 +103,20 @@ def get_parametrized_fixture_keys(item, scopenum, priority):
         # sort this so that different calls to
         # get_parametrized_fixture_keys will be deterministic.
         for argname, param_index in sorted(cs.indices.items()):
-            if cs._arg2scopenum[argname] != scopenum:
+            if cs._arg2scope[argname].value != scope:
                 continue
-            if scopenum == 0:  # session
+            if scope == 'session':
                 key = (argname, param_index)
-                arg_priority = argname_prioinfo[scopenum].get(key[0], lowest_priority)
-            elif scopenum == 1:  # package
+                arg_priority = argname_prioinfo[scope].get(key[0], lowest_priority)
+            elif scope == 'package':
                 key = (argname, param_index, item.fspath.dirpath())
-                arg_priority = argname_prioinfo[scopenum].get((key[0], key[2]), lowest_priority)
-            elif scopenum == 2:  # module
+                arg_priority = argname_prioinfo[scope].get((key[0], key[2]), lowest_priority)
+            elif scope == 'module':
                 key = (argname, param_index, item.fspath)
-                arg_priority = argname_prioinfo[scopenum].get((key[0], key[2]), lowest_priority)
-            elif scopenum == 3:  # class
+                arg_priority = argname_prioinfo[scope].get((key[0], key[2]), lowest_priority)
+            elif scope in ('class', 'function'):
                 key = (argname, param_index, item.fspath, item.cls)
-                arg_priority = argname_prioinfo[scopenum].get((key[0], key[2], key[3]), lowest_priority)
+                arg_priority = argname_prioinfo[scope].get((key[0], key[2], key[3]), lowest_priority)
 
 
             if arg_priority != priority:
@@ -141,19 +135,19 @@ def get_parametrized_fixture_keys(item, scopenum, priority):
 lowest_priority = 3
 
 priorities = list(itertools.product(
-    range(0, scopenum_function),
+    scopes,
     range(0, lowest_priority)
 ))
 
 def reorder_items(items):
     argkeys_cache = {}
     items_by_argkey = {}
-    for scopenum in range(0, scopenum_function):
+    for scope in scopes:
         for priority in range(0, lowest_priority):
-            argkeys_cache[scopenum, priority] = d = {}
-            items_by_argkey[scopenum, priority] = item_d = defaultdict(deque)
+            argkeys_cache[scope, priority] = d = {}
+            items_by_argkey[scope, priority] = item_d = defaultdict(deque)
             for item in items:
-                keys = OrderedDict.fromkeys(get_parametrized_fixture_keys(item, scopenum, priority))
+                keys = OrderedDict.fromkeys(get_parametrized_fixture_keys(item, scope, priority))
                 if keys:
                     d[item] = keys
                     for key in keys:
